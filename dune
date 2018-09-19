@@ -1,0 +1,16 @@
+; vim: set ft=lisp:
+(env
+(dev (flags (-w +a-4-29-40-41-42-44-45-48-58-59-60-40))))
+
+(executable
+  (name watch)
+  (libraries inotify inotify.lwt lwt.unix)
+  (modules watch)
+  (preprocess (pps lwt_ppx)))
+
+(executable
+  (name tdl)
+  (libraries bencode unix ANSITerminal)
+  (modules tdl tlist)
+;  (preprocess (pps lwt_ppx))
+  )
