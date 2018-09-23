@@ -75,19 +75,60 @@ let find_torrent () =
     | _ -> None
   in
   match file with
-  | Some x -> x
+  | Some x -> x, Tlist.parse x
   | None -> fail_with ("Unable to find torrent file in " ^ path)
 
+let read_lines ichan =
+  let rec aux acc =
+    try
+      aux @@ input_line ichan :: acc
+    with End_of_file -> acc
+  in
+  List.rev @@ aux []
+
+(* Download single-torrent file *)
 let download_simple torrent =
   print_endline "aria2c torrent"
-and download_sub torrent files =
-  print_endline torrent;
-  List.iter (fun x -> Printf.printf "%3d. %s\n" x.tf_index x.tf_name) files
+
+(* Download multiple files from torrent *)
+and download_sub tname torrent files =
+  let hh = Hashtbl.create @@ List.length files
+  and fzf_in, fzf_out = Unix.open_process "fzf --reverse --height 40% -m" in
+  let dlist, dnames =
+    try
+      List.iter (fun x ->
+          let name = Printf.sprintf "%s %s" (if Tlist.check_file torrent x then "✔" else " ") x.tf_name in
+          Hashtbl.add hh name x.tf_index;
+          Printf.fprintf fzf_out "%s\n" name
+        ) files;
+      flush fzf_out;
+      close_out fzf_out;
+      let lines = read_lines fzf_in in
+      let selected = match Unix.close_process (fzf_in, fzf_out) with
+        | Unix.WEXITED status when status = 0 -> lines
+        | _ -> []
+      in
+      (*List.iter (fun x -> Printf.printf " => #%-3d %s\n" (Hashtbl.find hh x) x) selected;*)
+      List.map (fun x -> Hashtbl.find hh x) selected, selected
+    with _ -> ignore (Unix.close_process (fzf_in, fzf_out)); [], []
+  in
+  match dlist with
+  | [] -> print_endline "Not downloading anything"
+  | _ ->
+    Printf.printf "Downloading from `%s'\n"  tname;
+    List.iter (fun x -> Printf.printf "  * %s\n" x) dnames;
+    flush stdout;
+    Sys.chdir "/tmp";
+    Unix.execvp "aria2c"
+      [| "aria2c";
+         "--select-file=" ^ (String.concat "," @@ List.map string_of_int dlist);
+         tname
+      |]
 
 let () =
-  let torrent = find_torrent() in
-  let files = list_files torrent in
+  let tname, torrent = find_torrent() in
+  let files = Tlist.contents torrent in
   if List.length files > 1 then
-    download_sub torrent files
+    download_sub tname torrent files
   else
-    download_simple torrent
+    download_simple tname
