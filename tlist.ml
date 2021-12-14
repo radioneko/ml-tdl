@@ -72,7 +72,7 @@ let list_files info =
   let extract_file index name_field dict =
     let name = D.get name_field dict |> make_pathname
     and size = D.get_int "length" dict in
-    make_tfile index name size
+    make_tfile index name (Int64.to_int size)
   in let extract_many root =
     List.mapi (fun i entry -> extract_file (i + 1) "path" entry) root
   in

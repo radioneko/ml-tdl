@@ -10,7 +10,13 @@
 
 (executable
   (name tdl)
-  (libraries bencode unix ANSITerminal)
+  (libraries bencode unix ANSITerminal cmdliner cohttp cohttp-lwt-unix)
   (modules tdl tlist)
 ;  (preprocess (pps lwt_ppx))
   )
+
+(executable
+  (name losty)
+;  (preprocess (pps ppx_let))
+  (libraries lambdasoup caqti-lwt inifiles unix cohttp cohttp-lwt-unix)
+  (modules losty request))

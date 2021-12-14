@@ -1,4 +1,6 @@
 open Tlist
+open Cmdliner
+
 exception Abort of string
 
 module Tuple = struct
@@ -67,16 +69,15 @@ let find_recent_torrent_in_dir dir =
  * 1.2. if argv[1] is a file => just use it
  * 2. Select most recent torrent from current directory
  *)
-let find_torrent () =
-  let path = if Array.length Sys.argv > 1 then Sys.argv.(1) else "." in
-  let file = match stat_kind path with
-    | Unix.S_DIR -> find_recent_torrent_in_dir path
-    | Unix.S_REG -> Some path
+let find_torrent pathname =
+  let file = match stat_kind pathname with
+    | Unix.S_DIR -> find_recent_torrent_in_dir pathname
+    | Unix.S_REG -> Some pathname
     | _ -> None
   in
   match file with
   | Some x -> x, Tlist.parse x
-  | None -> fail_with ("Unable to find torrent file in " ^ path)
+  | None -> fail_with ("Unable to find torrent file in " ^ pathname)
 
 let read_lines ichan =
   let rec aux acc =
@@ -87,14 +88,14 @@ let read_lines ichan =
   List.rev @@ aux []
 
 (* Download single-torrent file *)
-let download_simple torrent =
-  print_endline "aria2c torrent"
+let download_simple _torrent _files =
+  Some []
 
 (* Download multiple files from torrent *)
-and download_sub tname torrent files =
+and download_sub torrent files =
   let hh = Hashtbl.create @@ List.length files
-  and fzf_in, fzf_out = Unix.open_process "fzf --reverse --height 40% -m" in
-  let dlist, dnames =
+  and fzf_in, fzf_out = Unix.open_process "fzf -e --reverse --height 40% -m" in
+  let dlist =
     try
       List.iter (fun x ->
           let name = Printf.sprintf "%s %s" (if Tlist.check_file torrent x then "✔" else " ") x.tf_name in
@@ -109,26 +110,76 @@ and download_sub tname torrent files =
         | _ -> []
       in
       (*List.iter (fun x -> Printf.printf " => #%-3d %s\n" (Hashtbl.find hh x) x) selected;*)
-      List.map (fun x -> Hashtbl.find hh x) selected, selected
-    with _ -> ignore (Unix.close_process (fzf_in, fzf_out)); [], []
+      List.map (fun x -> Hashtbl.find hh x) selected
+    with _ -> ignore (Unix.close_process (fzf_in, fzf_out)); []
   in
   match dlist with
-  | [] -> print_endline "Not downloading anything"
-  | _ ->
+  | [] -> None
+  | _ -> Some ["--select-file=" ^ (String.concat "," @@ List.map string_of_int dlist)]
+
+let external_ip () =
+  let rec get uri =
+    let open Cohttp in
+    let open Cohttp_lwt in
+    let open Cohttp_lwt_unix in
+    let open Lwt.Infix in
+    Client.get (Uri.of_string uri)
+    >>= fun (resp, body) ->
+    let status  = Cohttp.Response.status resp in
+    match status with
+    | `OK -> Lwt_result.ok (Cohttp_lwt.Body.to_string body)
+    | `Found
+    | `Moved_permanently ->
+      Lwt.return_error "Redirect handling not implemented"
+    | _ -> Lwt.return_error (Printf.sprintf "Unexpected code: %d" (Code.code_of_status status))
+  in
+  get "http://api.ipify.org" |> Lwt_main.run |> function
+  | Ok body -> Some body
+  | Error msg ->
+    Printf.eprintf "Unable to obtain exernal ip: %s\n" msg;
+    None
+
+(* main function *)
+let tdl resolve_ext_ip pathname =
+  let tname, torrent = find_torrent pathname in
+  let files = Tlist.contents torrent in
+  let args =
+  if List.length files > 1 then
+    download_sub torrent files
+  else
+    download_simple torrent files
+  in
+  match args with
+  | None -> print_endline "Not downloading anything"
+  | Some args ->
+    let ext_ip =
+      if resolve_ext_ip then
+        match external_ip() with
+        | Some addr ->
+          Printf.printf "Using external ip %s\n" addr;
+          ["--bt-external-ip=" ^ addr ]
+        | None -> []
+      else
+        []
+    in
     Printf.printf "Downloading from `%s'\n"  tname;
-    List.iter (fun x -> Printf.printf "  * %s\n" x) dnames;
     flush stdout;
     Sys.chdir "/tmp";
-    Unix.execvp "aria2c"
-      [| "aria2c";
-         "--select-file=" ^ (String.concat "," @@ List.map string_of_int dlist);
-         tname
-      |]
+    Unix.execvp "aria2c" @@ Array.of_list (
+      "aria2c"
+      :: args
+      @ [tname; "--seed-time=10"]
+      @ ext_ip
+    )
+
+let ext_ip =
+  let doc = "Resolve external ip" in
+  Arg.(value & flag & info ["e"; "ext-ip"] ~doc)
 
 let () =
-  let tname, torrent = find_torrent() in
-  let files = Tlist.contents torrent in
-  if List.length files > 1 then
-    download_sub tname torrent files
-  else
-    download_simple tname
+  let path =
+    let doc = "Single file or directory." in
+    Arg.(value & pos 0 string "." & info [] ~docv:"PATH" ~doc)
+  in
+  let tdl_t = Term.(const tdl $ ext_ip $ path) in
+  Term.exit @@ Term.eval (tdl_t, Term.info "tdl")
