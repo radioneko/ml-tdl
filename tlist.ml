@@ -91,14 +91,20 @@ let parse src =
 
 let contents torrent = torrent.t_files
 
+(* Returns true is on-disk file size matches size and has no holes *)
+external file_probe : string -> int -> bool = "file_probe"
+
 let check_file torrent f =
   let full_path = "/tmp/" ^ (match torrent.t_root with
     | Some root -> root ^ "/" ^ f.tf_name
     | None -> f.tf_name)
   in
+  file_probe full_path f.tf_size
+    (*
   try
     let st = Unix.stat full_path in
     match st.st_kind with
     | Unix.S_REG when st.st_size = f.tf_size -> true
     | _ -> false
   with _ -> false
+       *)
