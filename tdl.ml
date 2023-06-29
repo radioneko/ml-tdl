@@ -58,10 +58,40 @@ and seq_max val_fn map_fn seq =
   | Some (_, x) -> Some (map_fn x)
   | None -> None
 
+let read_lines ichan =
+  let rec aux acc =
+    try
+      aux @@ input_line ichan :: acc
+    with End_of_file -> acc
+  in
+  List.rev @@ aux []
+
+(* Choose torrent file from dir using fzf *)
+let choose_torrent dir torrents =
+  Array.sort (fun (_, t0) (_, t1) -> - Float.compare t0 t1) torrents;
+  let fzf_in, fzf_out = Unix.open_process "fzf -e --reverse --height 40% -m" in
+  try
+    Array.iter (fun (name, _) ->
+        Printf.fprintf fzf_out "%s\n" name
+      ) torrents;
+    flush fzf_out;
+    close_out fzf_out;
+    let lines = read_lines fzf_in in
+    match Unix.close_process (fzf_in, fzf_out) with
+    | Unix.WEXITED status when status = 0 ->
+        begin
+          match lines with
+          | x :: _ -> Some x
+          | _ -> None
+        end
+    | _ -> None
+  with _ -> ignore (Unix.close_process (fzf_in, fzf_out)); None
+
+external query_mod_state : unit -> int = "query_mod_state"
+
 (* Find most recent file *)
-let find_recent_torrent_in_dir dir =
-  filter_by_suffix_add_mtime dir ".torrent"
-  |> seq_max Tuple.second (fun (name, _) -> path_concat dir name)
+let find_recent_torrent_in_dir dir torrents =
+  torrents |> seq_max Tuple.second (fun (name, _) -> path_concat dir name)
 
 (* find most recent torrent file according to following rules:
  * 1. From command line argument
@@ -71,21 +101,32 @@ let find_recent_torrent_in_dir dir =
  *)
 let find_torrent pathname =
   let file = match stat_kind pathname with
-    | Unix.S_DIR -> find_recent_torrent_in_dir pathname
+    | Unix.S_DIR ->
+        let torrents = filter_by_suffix_add_mtime pathname ".torrent" |> Array.of_seq in
+        begin
+        match Array.length torrents with
+        | 0 -> None
+        | 1 -> Some (fst torrents.(0))
+        | _ -> 
+            let ctrl_is_held = ((query_mod_state ()) land 4) <> 0 in
+            if ctrl_is_held then
+              match choose_torrent pathname torrents with
+              | Some fn ->
+                  let now = Unix.time () in
+                  let fname = pathname ^ "/" ^ fn in
+                  Unix.utimes fname now now;
+                  Some fname
+              | None ->
+                  None
+            else
+              (Array.to_seq torrents |> find_recent_torrent_in_dir pathname)
+        end
     | Unix.S_REG -> Some pathname
     | _ -> None
   in
   match file with
   | Some x -> x, Tlist.parse x
   | None -> fail_with ("Unable to find torrent file in " ^ pathname)
-
-let read_lines ichan =
-  let rec aux acc =
-    try
-      aux @@ input_line ichan :: acc
-    with End_of_file -> acc
-  in
-  List.rev @@ aux []
 
 (* Download single-torrent file *)
 let download_simple _torrent _files =

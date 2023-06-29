@@ -26,4 +26,6 @@
   (modules tlist)
   (libraries bencode unix)
   (wrapped false)
-  (foreign_stubs (language c) (names file-probe)))
+  (foreign_stubs (language c) (names file-probe))
+  (c_library_flags (-lX11))
+  )

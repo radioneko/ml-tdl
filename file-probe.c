@@ -2,11 +2,16 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include <X11/Xlib.h>
+#include <X11/XKBlib.h>
+
 #include <caml/mlvalues.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 CAMLprim value file_probe(value pathname, value expected_size)
 {
@@ -26,3 +31,25 @@ return_false:
 	close(fd);
 	return Val_int(0);
 }
+
+
+#if 1
+CAMLprim value query_mod_state()
+{
+	static Display *kdpy;
+
+	if (kdpy == NULL && getenv("DISPLAY") != NULL) {
+		int reason, code, err, major = XkbMajorVersion, minor = XkbMajorVersion;
+		kdpy = XkbOpenDisplay("", &code, &err, &major, &minor, &reason);
+	}
+
+	if (kdpy != NULL) {
+		XkbStateRec xs;
+		memset(&xs, 0, sizeof(xs));
+		XkbGetState(kdpy, XkbUseCoreKbd, &xs);
+		return Val_int(xs.mods);
+	}
+
+	return Val_int(0);
+}
+#endif
